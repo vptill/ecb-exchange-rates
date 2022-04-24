@@ -10,7 +10,7 @@ module.exports = {
       url: "http://www.ecb.int/stats/eurofxref/eurofxref-daily.xml"
     },
 
-    baseCurrency: "EUR",
+    baseCurrency: "USD",
 
     currenciesMap: [],
 
@@ -41,13 +41,15 @@ module.exports = {
     },
 
     createCurrenciesMap: function(currencies) {
+      this.currenciesMap = []
       var self = this;
+      let baseCurrencyRate = this.baseCurrency !== 'EUR' ? currencies.find(e => e['$'].currency === this.baseCurrency)['$'].rate : 1;
       _.each(currencies, function(item) {
          var currency = eval('item.$').currency;
          var rate = eval('item.$').rate;
-         self.currenciesMap.push({ currency: currency, rate: rate });
+         self.currenciesMap.push({ currency: currency, rate: (1 / baseCurrencyRate) * rate });
       });
-      self.currenciesMap.push({ currency: 'EUR', rate: 1 });
+      self.currenciesMap.push({ currency: 'EUR', rate: (1 / baseCurrencyRate) * 1 });
       self.executeCallback();
     },
 
@@ -91,7 +93,7 @@ module.exports = {
 
     getBaseCurrency: function(callback) {
       this.executeCallback = function() {
-          callback({currency:"EUR"});
+          callback({currency:this.baseCurrency});
         }();
     },
 
