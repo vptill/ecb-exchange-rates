@@ -41,15 +41,23 @@ module.exports = {
     },
 
     createCurrenciesMap: function(currencies) {
+      this.currenciesMetadata = this.readJson();
       this.currenciesMap = []
       var self = this;
       let baseCurrencyRate = this.baseCurrency !== 'EUR' ? currencies.find(e => e['$'].currency === this.baseCurrency)['$'].rate : 1;
       _.each(currencies, function(item) {
          var currency = eval('item.$').currency;
          var rate = eval('item.$').rate;
-         self.currenciesMap.push({ currency: currency, rate: (1 / baseCurrencyRate) * rate });
+
+         console.log(item)
+          var getCurrency = function(currency) {
+            return _.find(self.currenciesMetadata, function(item) {
+              return item.Code === currency
+            });
+          };
+         self.currenciesMap.push({ currency: currency, rate: (1 / baseCurrencyRate) * rate, symbol: getCurrency(currency)?.Symbol });
       });
-      self.currenciesMap.push({ currency: 'EUR', rate: (1 / baseCurrencyRate) * 1 });
+      self.currenciesMap.push({ currency: 'EUR', rate: (1 / baseCurrencyRate) * 1, symbol: "€" });
       self.executeCallback();
     },
 
