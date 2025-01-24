@@ -1,8 +1,6 @@
-var xml2js = require("xml2js");
-var request = require("request");
-var _ = require("underscore");
-var fs = require("fs");
-var path = require("path");
+const xml2js = require("xml2js");
+const fs = require("fs");
+const path = require("path");
 
 module.exports = {
   settings: {
@@ -15,10 +13,8 @@ module.exports = {
 
   currenciesMetadata: [],
 
-  executeCallback: null,
-
   readJson: function () {
-    var data = fs.readFileSync(
+    const data = fs.readFileSync(
       path.resolve(__dirname, "Currencies.json"),
       "utf8"
     );
@@ -26,60 +22,66 @@ module.exports = {
   },
 
   removeNamespaces: function (xml) {
-    var fixedXML = xml.replace(/(<\/?)(\w+:)/g, "$1");
+    const fixedXML = xml.replace(/(<\/?)(\w+:)/g, "$1");
     return fixedXML.replace(/xmlns(:\w+)?="[^"]*"/g, "").trim();
   },
 
-  parseXML: function (xml) {
-    var self = this;
-    var cleanXML = this.removeNamespaces(xml);
-    var parser = new xml2js.Parser();
+  parseXML: async function (xml) {
+    const cleanXML = this.removeNamespaces(xml);
+    const parser = new xml2js.Parser();
 
-    parser.parseString(cleanXML, function (err, result) {
-      var currencies = result.Envelope.Cube[0].Cube[0].Cube;
-      self.createCurrenciesMap(currencies);
-    });
+    try {
+      const result = await parser.parseStringPromise(cleanXML);
+      const currencies = result.Envelope.Cube[0].Cube[0].Cube;
+      return this.createCurrenciesMap(currencies);
+    } catch (err) {
+      console.error("Failed to parse XML:", err);
+      throw err;
+    }
   },
 
   createCurrenciesMap: function (currencies) {
     this.currenciesMetadata = this.readJson();
     this.currenciesMap = [];
-    var self = this;
-    let baseCurrencyRate =
+
+    const baseCurrencyRate =
       this.baseCurrency !== "EUR"
         ? currencies.find((e) => e["$"].currency === this.baseCurrency)["$"]
             .rate
         : 1;
-    _.each(currencies, function (item) {
-      var currency = eval("item.$").currency;
-      var rate = eval("item.$").rate;
 
-      var getCurrency = function (currency) {
-        return _.find(self.currenciesMetadata, function (item) {
-          return item.Code === currency;
-        });
+    currencies.forEach((item) => {
+      const currency = item["$"].currency;
+      const rate = item["$"].rate;
+
+      const getCurrency = (currency) => {
+        return this.currenciesMetadata.find((item) => item.Code === currency);
       };
-      self.currenciesMap.push({
-        currency: currency,
+
+      this.currenciesMap.push({
+        currency,
         rate: (1 / baseCurrencyRate) * rate,
         symbol: getCurrency(currency)?.Symbol,
       });
     });
-    self.currenciesMap.push({
+
+    this.currenciesMap.push({
       currency: "EUR",
       rate: (1 / baseCurrencyRate) * 1,
       symbol: "€",
     });
-    self.executeCallback();
+
+    return this.currenciesMap;
   },
 
-  getExchangeRates: function () {
-    var self = this;
-    request(self.settings.url, function (error, response, body) {
-      if (!error && response.statusCode == 200) {
-        self.parseXML(body);
+  getExchangeRates: async function () {
+    try {
+      const response = await fetch(this.settings.url);
+      if (response.ok) {
+        const body = await response.text();
+        return await this.parseXML(body);
       } else {
-        self.parseXML(`
+        return await this.parseXML(`
           <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
             <gesmes:subject>Reference rates</gesmes:subject>
             <gesmes:Sender>
@@ -121,94 +123,81 @@ module.exports = {
             </Cube>
           </gesmes:Envelope>`);
       }
-    });
+    } catch (err) {
+      console.error("Failed to fetch exchange rates:", err);
+      throw err;
+    }
   },
 
   roundValues: function (value, places) {
-    var multiplier = Math.pow(10, places);
+    const multiplier = Math.pow(10, places);
     return Math.round(value * multiplier) / multiplier;
   },
 
   fetchRates: function (settings) {
-    var self = this;
-    var getCurrency = function (currency) {
-      return _.find(self.currenciesMap, function (item) {
-        return item.currency === currency;
-      });
+    const getCurrency = (currency) => {
+      return this.currenciesMap.find((item) => item.currency === currency);
     };
 
-    var rates = {};
+    const rates = {};
     rates.fromCurrency = getCurrency(settings.fromCurrency);
     rates.toCurrency = getCurrency(settings.toCurrency);
     rates.exchangeRate = (1 / rates.fromCurrency.rate) * rates.toCurrency.rate;
     return rates;
   },
 
-  getAllCurrencies: function (callback) {
-    this.getExchangeRates();
-    this.executeCallback = function () {
-      callback(this.currenciesMap);
-    };
+  getAllCurrencies: async function () {
+    const currencies = await this.getExchangeRates();
+    return currencies;
   },
 
-  getBaseCurrency: function (callback) {
-    this.executeCallback = (function () {
-      callback({ currency: this.baseCurrency });
-    })();
+  getBaseCurrency: async function () {
+    return { currency: this.baseCurrency };
   },
 
-  convert: function (settings, callback) {
-    this.getExchangeRates();
-    this.executeCallback = function () {
-      var exchangedValue = {};
+  convert: async function (settings) {
+    await this.getExchangeRates();
+    const exchangedValue = {};
 
-      var rates = this.fetchRates(settings);
-      exchangedValue.currency = rates.toCurrency.currency;
-      exchangedValue.exchangeRate = this.roundValues(
-        rates.exchangeRate,
-        settings.accuracy | 4
-      );
-      exchangedValue.amount = this.roundValues(
-        settings.amount * rates.exchangeRate,
-        settings.accuracy | 4
-      );
+    const rates = this.fetchRates(settings);
+    exchangedValue.currency = rates.toCurrency.currency;
+    exchangedValue.exchangeRate = this.roundValues(
+      rates.exchangeRate,
+      settings.accuracy || 4
+    );
+    exchangedValue.amount = this.roundValues(
+      settings.amount * rates.exchangeRate,
+      settings.accuracy || 4
+    );
 
-      callback(exchangedValue);
-    };
+    return exchangedValue;
   },
 
-  getExchangeRate: function (settings, callback) {
-    this.getExchangeRates();
-    this.executeCallback = function () {
-      var exchangedValue = {};
+  getExchangeRate: async function (settings) {
+    await this.getExchangeRates();
+    const exchangedValue = {};
 
-      var rates = this.fetchRates(settings);
-      exchangedValue.toCurrency = rates.toCurrency.currency;
-      exchangedValue.fromCurrency = rates.fromCurrency.currency;
-      exchangedValue.exchangeRate = this.roundValues(
-        rates.exchangeRate,
-        settings.accuracy | 4
-      );
+    const rates = this.fetchRates(settings);
+    exchangedValue.toCurrency = rates.toCurrency.currency;
+    exchangedValue.fromCurrency = rates.fromCurrency.currency;
+    exchangedValue.exchangeRate = this.roundValues(
+      rates.exchangeRate,
+      settings.accuracy || 4
+    );
 
-      callback(exchangedValue);
-    };
+    return exchangedValue;
   },
 
-  getCurrenciesMetadata: function (callback) {
+  getCurrenciesMetadata: async function () {
     this.currenciesMetadata = this.readJson();
-    callback(this.currenciesMetadata);
+    return this.currenciesMetadata;
   },
 
-  getCurrencyMetadata: function (settings, callback) {
+  getCurrencyMetadata: async function (settings) {
     this.currenciesMetadata = this.readJson();
-
-    var self = this;
-    var getCurrency = function (currency) {
-      return _.find(self.currenciesMetadata, function (item) {
-        return item.Code === currency;
-      });
+    const getCurrency = (currency) => {
+      return this.currenciesMetadata.find((item) => item.Code === currency);
     };
-
-    callback(getCurrency(settings.currency));
+    return getCurrency(settings.currency);
   },
 };
